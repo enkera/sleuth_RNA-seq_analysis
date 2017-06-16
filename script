@@ -1,0 +1,75 @@
+#need to have kallisto output in a specific directory (parent folder>kallisto_results>individual sample folders (kallisto)>fastq files>individual .h5, .json, .tsv files) 
+#install sleuth (lines #1-8 only have to be done the 1st time)
+#1st installrhdf5
+source("http://bioconductor.org/biocLite.R")
+biocLite("rhdf5")
+#then instal devtools 
+install.packages("devtools")
+#then install sleuth
+devtools::install_github("pachterlab/sleuth")
+#
+#start here if already installed
+#control enter to run from script windown (good habit to keep notes here)
+#loading sleuth post installation
+suppressMessages({
+  library("sleuth")
+})
+#1st step is to specify the directory where the kallisto results are stored (replace ".." with dirictory; use console trick to find)
+#tip: can drag file into console to get the file directory (e.g. /Volumes/ENKE_MAC/Sleuth is the folder on my external hard drive)
+#this is tricky: have to break directory name into pieces
+sample_id <- dir(file.path("/Volumes/ENKE_MAC/Sleuth", "kallisto_results"))
+#The result can be displayed by typing
+sample_id
+#next create a list of paths to the kallisto results indexed by the sample IDs
+kal_dirs <- file.path("/Volumes/ENKE_MAC/Sleuth","kallisto_results", sample_id, "kallisto")
+kal_dirs
+#next load the design matrix table ("design.txt") explaining samples; make sure the "sample" column matches the directory name 
+s2c <- read.table(file.path("/Volumes/ENKE_MAC/Sleuth", "kallisto_results", "design.txt"), header = TRUE, stringsAsFactors=FALSE)
+#to view
+s2c
+#dplyer command to separate headers
+s2c <- dplyr::select(s2c, sample = sample, region,	rep)
+#to view
+s2c
+#add a column to table with directory info using mutate command 
+s2c <- dplyr::mutate(s2c, path = kal_dirs)
+#to view
+s2c
+#Next, the “sleuth object” can be constructed
+so <- sleuth_prep(s2c, extra_bootstrap_summary = TRUE)
+#Then the full model is fit with:
+so <- sleuth_fit(so, ~region, 'full')
+#The “reduced” model is fit with
+so <- sleuth_fit(so, ~1, 'reduced')
+#and the test is performed with
+so <- sleuth_lrt(so, 'reduced', 'full')
+#The models that have been fit can always be examined with the models() function.
+models(so)
+#The results of the test can be examined with
+#This table will shown the top 20 significant genes with a (Benjamini-Hochberg multiple testing corrected) q-value <= 0.05 (this can be customized)
+sleuth_table <- sleuth_results(so, 'reduced:full', 'lrt', show_all = FALSE)
+sleuth_significant <- dplyr::filter(sleuth_table, qval <= 0.05)
+head(sleuth_significant, 20)
+#make a totally sweet counts plot
+plot_bootstrap(so, "NM_001005337.2", units = "est_counts", color_by = "region")
+#make a baller PCA plot
+plot_pca(so, color_by = 'region')
+#use gene names instead of terrible transcript #s
+#1st install biomaRt
+source("http://bioconductor.org/biocLite.R")
+biocLite("biomaRt")
+#Then collect gene names (the below example doesn't work because I didn't use the Ensembl transcript assembly??? Figure this out later)
+mart <- biomaRt::useMart(biomart = "ENSEMBL_MART_ENSEMBL",
+                         dataset = "hsapiens_gene_ensembl",
+                         host = 'ensembl.org')
+t2g <- biomaRt::getBM(attributes = c("ensembl_transcript_id", "ensembl_gene_id",
+                                     "external_gene_name"), mart = mart)
+t2g <- dplyr::rename(t2g, target_id = ensembl_transcript_id,
+                     ens_gene = ensembl_gene_id, ext_gene = external_gene_name)
+#and add them into the sleuth table
+so <- sleuth_prep(s2c, target_mapping = t2g)
+#
+plot_group_density(so, use_filtered = TRUE, units = "est_counts",
+                   trans = "log", grouping = setdiff(colnames(so$sample_to_covariates),
+                                                     "region"), offset = 1)
+#reminder: my sample matrix headers are "sample", "region",	"rep"
